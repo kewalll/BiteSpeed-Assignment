@@ -25,3 +25,5 @@ Use data formats as JSON for sending request as:
 ![Identify](image-1.png)
 
 ![Database after calling identify](image-2.png)
+
+![Delete a data](image-3.png)
