@@ -45,22 +45,70 @@ app.post("/identify", async (req, res) => {
       return res.status(200).json({
         contact: {
           primaryContactId: contact.id,
-          emails: [contact.email],
-          phoneNumbers: [contact.phonenumber],
+          emails: [contact.email].filter(e => e),
+          phoneNumbers: [contact.phonenumber].filter(p => p),
           secondaryContactIds: []
         }
       });
     }
 
-    let primaryContact = contacts.find(c => c.linkprecedence === 'primary');
-    if (!primaryContact) {
-      primaryContact = await db.query(`SELECT * FROM Contacts WHERE id = $1`, [contacts[0].linkedid]);
-      primaryContact = primaryContact.rows[0];
+    const primaryContacts = [];
+    for (const contact of contacts) {
+      if (contact.linkprecedence === 'primary') {
+        primaryContacts.push(contact);
+      } else if (contact.linkedid) {
+        const primaryRes = await db.query(`SELECT * FROM Contacts WHERE id = $1 AND deletedAt IS NULL`, [contact.linkedid]);
+        if (primaryRes.rows.length > 0) {
+          const primary = primaryRes.rows[0];
+          if (!primaryContacts.find(p => p.id === primary.id)) {
+            primaryContacts.push(primary);
+          }
+        }
+      }
     }
 
-    const alreadyExists = contacts.some(c => c.email === email && c.phoneNumber === phoneNumber);
+    if (primaryContacts.length > 1) {
+      const oldestPrimary = primaryContacts.reduce((oldest, current) => 
+        new Date(oldest.createdat) < new Date(current.createdat) ? oldest : current
+      );
 
-    if (!alreadyExists) {
+      for (const primary of primaryContacts) {
+        if (primary.id !== oldestPrimary.id) {
+          await db.query(`
+            UPDATE Contacts 
+            SET linkPrecedence = 'secondary', linkedId = $1, updatedAt = NOW()
+            WHERE id = $2
+          `, [oldestPrimary.id, primary.id]);
+
+          await db.query(`
+            UPDATE Contacts 
+            SET linkedId = $1, updatedAt = NOW()
+            WHERE linkedId = $2 AND deletedAt IS NULL
+          `, [oldestPrimary.id, primary.id]);
+        }
+      }
+    }
+
+    let primaryContact = primaryContacts.length > 0 
+      ? primaryContacts.reduce((oldest, current) => 
+          new Date(oldest.createdat) < new Date(current.createdat) ? oldest : current
+        )
+      : null;
+
+    if (!primaryContact) {
+      const primaryRes = await db.query(`SELECT * FROM Contacts WHERE id = $1 AND deletedAt IS NULL`, [contacts[0].linkedid]);
+      primaryContact = primaryRes.rows[0];
+    }
+
+    const exactMatch = contacts.find(c => c.email === email && c.phonenumber === phoneNumber);
+    
+    const emailContact = email ? contacts.find(c => c.email === email) : null;
+    const phoneContact = phoneNumber ? contacts.find(c => c.phonenumber === phoneNumber) : null;
+    
+    const isConsolidatingExisting = emailContact && phoneContact && 
+      emailContact.id !== phoneContact.id;
+
+    if (!exactMatch && !isConsolidatingExisting) {
       await db.query(`
         INSERT INTO Contacts (email, phoneNumber, linkPrecedence, linkedId)
         VALUES ($1, $2, 'secondary', $3);
@@ -69,7 +117,8 @@ app.post("/identify", async (req, res) => {
 
     const relatedContactsRes = await db.query(`
       SELECT * FROM Contacts 
-      WHERE id = $1 OR linkedId = $1 AND deletedAt IS NULL
+      WHERE (id = $1 OR linkedId = $1) AND deletedAt IS NULL
+      ORDER BY createdAt ASC
     `, [primaryContact.id]);
 
     const relatedContacts = relatedContactsRes.rows;
@@ -94,7 +143,6 @@ app.post("/identify", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 app.get("/showcontacts", async (req, res) => {
   try {
@@ -125,8 +173,6 @@ app.delete("/deletecontacts/:id", async (req, res) => {
   }
 });
 
-
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
-

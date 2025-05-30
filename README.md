@@ -22,7 +22,7 @@ Use data formats as JSON for sending request as:
 
 ![Calling first data entry request](image.png)
 
-![Identify](image-1.png)
+![Identify](image-4.png)
 
 ![Database after calling identify](image-2.png)
 
